@@ -4,13 +4,6 @@ pragma solidity 0.8.30;
 contract Voting {
     // This is a voting contract that helps users(*voters) to vote by individuality.
 
-    // what are the nouns in the question? the nouns form the data entity 
-    // 1. Candidate
-    // 2. Voters.
-    // 3. Winner.
-    // 4. admin.
-    // 5. Vote.
-
     event Voted(address indexed voterAddress, address indexed candidateAddress);
     event VoterRegistered(uint indexed id, string name, address indexed userAddress);
     event VotingEventCreated(uint id, string name, uint startTime, uint endTime);
@@ -19,9 +12,9 @@ contract Voting {
     address winner;
     address admin;
 
-    uint constant votingPower = 1;
     uint voteCount;
-    uint totalEventCount;
+    uint eventCount;
+    uint candidateCount;
 
     struct Candidate {
         address candidateAddress;
@@ -41,7 +34,7 @@ contract Voting {
     struct Vote {
         address candidateAddress;   // the address is only needed to vote
         uint id;
-        address voter;
+        Voter voter;
         uint voteWeight;
         bool voted;
     }
@@ -64,7 +57,7 @@ contract Voting {
     enum EventStatus { pending, approved }
     
     mapping (uint id => VotingEvent ) public events;
-    mapping (address addr => Candidate) public candidates;
+    mapping (uint id => Candidate) public candidates;
     mapping (uint id => Voter) public voters;
     mapping (uint id => Vote) public voteCast;
 
@@ -74,8 +67,14 @@ contract Voting {
     mapping (uint eventId => uint[]) public allVoterIdByEvent;
     mapping (uint eventId => uint[]) public allCandidateIdByEvent;
 
-    mapping (uint eventId => address[]) public allVoterByEvent;
+    mapping (uint eventId => Candidate[]) public allCandidateByEvent;
+    mapping (uint eventId => Voter[]) public allVoterByEvent;
+    mapping(uint eventId => Vote[]) public allVotesByEvent;
+
     mapping(address candidateAddress => Vote[]) public allVotesByCandidate;  // for the vote to be individualized.
+    mapping (address candidateAddress => Voter[]) public allVotersByCandidate;
+
+    mapping (uint votes => address addr) public votesPerCandidate;
 
     uint[] allCandidateId;
     uint[] allVoterId;
@@ -103,18 +102,14 @@ contract Voting {
         _;
     }
 
-    function createVotingEvent(uint id, string memory name, uint startTime, uint endTime) public  {
-        uint eventId = totalEventCount;
+    function createVotingEvent(string memory name, uint startTime, uint endTime) public  {
+        uint eventId = eventCount++;
 
         if(events[eventId].status == EventStatus.pending) {
             revert("Event already created!");
         }
 
-        // if() {
-        //     revert("");
-        // }
-
-        VotingEvent storage votingEvent  = events[id];
+        VotingEvent storage votingEvent  = events[eventId];
         votingEvent.id = eventId;
         votingEvent.name = name;
         votingEvent.owner = msg.sender;
@@ -126,10 +121,10 @@ contract Voting {
         votingEvent.totalRegisteredCandidates = 0;
         votingEvent.status = EventStatus.pending;
 
-        allVotingEventId.push(id);
+        allVotingEventId.push(eventId);
         events[eventId] = votingEvent;
 
-        emit VotingEventCreated(id, name, startTime, endTime);
+        emit VotingEventCreated(eventId, name, startTime, endTime);
     }
 
     function approveEvent(uint eventId) public onlyAdmin {
@@ -142,12 +137,14 @@ contract Voting {
         }
     }
 
-    function registerCandidate(address addr, string memory name, uint id, uint eventId) public onlyOwner(events[eventId].owner) {
+    function registerCandidate(address addr, string memory name, uint eventId) public onlyOwner(events[eventId].owner) {
+        uint candidateId = candidateCount++;
+        
         if(events[eventId].status != EventStatus.approved) {
             revert("Event is not yet approved!");
         }
 
-        if(candidates[addr].candidateAddress != address(0)) {
+        if(candidates[candidateId].candidateAddress != address(0)) {
             revert("Candidate already registered!");
         }
 
@@ -155,18 +152,19 @@ contract Voting {
             revert("Event is ended!");
         }
 
-        Candidate storage candidate = candidates[addr];
+        Candidate storage candidate = candidates[candidateId];
         candidate.name = name;
         candidate.candidateAddress = addr;
-        candidate.id = id;
+        candidate.id = candidateId;
 
-        allCandidateId.push(id);
-        allCandidateIdByEvent[eventId].push(id);
+        allCandidateId.push(candidateId);
+        allCandidateIdByEvent[eventId].push(candidateId);
+
         events[eventId].totalRegisteredCandidates = allCandidateIdByEvent[eventId].length;
 
         eventCandidates[eventId] = candidate;
 
-        emit CandidateRegistered(id, name, addr);
+        emit CandidateRegistered(candidateId, name, addr);
     }
 
     function startEvent(uint eventId) public onlyOwner(events[eventId].owner) {
@@ -217,17 +215,19 @@ contract Voting {
         }
 
         // candidates[candidateAddr].eventid
-        uint voteId = voteCount;
+        uint voteId = voteCount++;
 
         Vote storage vote = voteCast[voteId];
 
         vote.candidateAddress = candidateAddr;
         vote.id = voteId;
-        vote.voter = msg.sender;
+        vote.voter = eventVoters[eventId];
         vote.voted = true;
 
         // events[eventId]
+        allVoteId.push(voteId);
         allVotesByCandidate[candidateAddr].push(vote);
+        allVotesByEvent[eventId].push(vote);
         allVoterByEvent[eventId].push(vote.voter);
         // allValidVoterByCandidate[e]
 
@@ -239,14 +239,6 @@ contract Voting {
         voteCount++;
     }
 
-    function getAllVotesByCandidate(address addr) public view returns(Vote[] memory) {
-        return allVotesByCandidate[addr];
-    }
-
-    function getTotalVotesByCandidates(address addr) public view returns(uint) {
-        return allVotesByCandidate[addr].length;
-    }
-
     function getTotalCandidatesByEvent(uint eventId) public view returns(uint) {
         return allCandidateIdByEvent[eventId].length;
     }
@@ -255,20 +247,95 @@ contract Voting {
         return allVoterByEvent[eventId].length;
     }
 
-    function getTotalVoterByEvent(uint ) public view returns() {
-
+    function getTotalVotesByEvent(uint eventId) public view returns(uint) {
+        return allVotesByEvent[eventId].length;
     }
 
-    function getAllVotersByEvent(uint eventId) public view returns(address[] memory) {
+    function getAllVotersByEvent(uint eventId) public view returns(Voter[] memory) {
         return allVoterByEvent[eventId];
     }
 
-    function getEventWinner(uint eventId) public view onlyOwner(events[eventId].owner) returns(address) {
-        
+    function getAllVotesByEvent(uint eventId) public view returns(Vote[] memory) {
+        return allVotesByEvent[eventId];
     }
 
+    function getAllCandidatesByEvent(uint eventId) public view returns(Candidate[] memory) {
+        return allCandidateByEvent[eventId];
+    }
 
-    // function getAllRegistered(params) {
-    //     code
-    // }
+    function getAllVotesByCandidate(address addr) public view returns(Vote[] memory) {
+        return allVotesByCandidate[addr];
+    }
+
+    function getAllVoterByCandidate(address addr) public view returns(Voter[] memory) {
+        return allVotersByCandidate[addr];
+    }
+
+    function getTotalVotesByCandidates(address addr) public view returns(uint) {
+        return allVotesByCandidate[addr].length;
+    }
+
+    function getTotalVoterByCandidates(address addr) public view returns(uint) {
+        return allVotersByCandidate[addr].length;
+    }
+
+    function getAllCandidate() public view returns(uint) {
+        return allCandidateId.length;
+    }
+
+    function getAllVotes() public view returns(uint) {
+        return allVoteId.length;
+    }
+
+    function getAllVoter() public view returns(uint) {
+        return allVoterId.length;
+    }
+
+    function getTotalVoters() public view returns(uint) {
+        return allVoterId.length;
+    }
+
+    function getAllCandidates() public view returns(uint) {
+        return candidateCount;
+    }
+
+    function getEventWinner(uint eventId) public onlyOwner(events[eventId].owner) returns(address, uint) {
+        uint eventTotalCandidate = getTotalCandidatesByEvent(eventId);
+
+        uint[] memory data;
+
+        for(uint i = 0; i < eventTotalCandidate; i++) {
+            address addr = candidates[allCandidateId[i]].candidateAddress;
+            data[i] = getTotalVotesByCandidates(addr);
+            votesPerCandidate[data[i]] = addr;
+        }
+
+        sort(data);
+
+        uint maxVote = findMax(data, 0);
+        return (votesPerCandidate[maxVote], maxVote);
+    }
+
+    function sort(uint[] memory data) public pure {
+        for (uint i = 0; i < data.length; i++) {
+            for (uint j = i + 1; j < data.length; j++) {
+                if (data[i] > data[j]) {
+                    uint temp = data[i];
+                    data[i] = data[j];
+                    data[j] = temp;
+                }
+            }
+        }
+    }
+
+    function findMax(uint[] memory data, uint negativeInfinity) public pure returns (uint) {
+        uint i = data.length;
+        while (i > 0) {
+            i--;
+            if (data[i] > negativeInfinity) {
+                negativeInfinity = data[i];
+            }
+        }
+        return negativeInfinity;
+    }
 }
